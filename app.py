@@ -19,11 +19,8 @@ import firebase_admin
 from typing import Dict, Optional, Tuple
 import json
 import time
+import threading
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
 # ============================================================================
 # FIREBASE INITIALIZATION
 # ============================================================================
@@ -35,22 +32,39 @@ def init_firebase():
     Works with both local secrets.toml and Hugging Face environment variables.
     """
     if not firebase_admin._apps:
+        try:
             # Try to get from st.secrets first (local development)
-        fb_creds = st.secrets["firebase"]
-        private_key = fb_creds["private_key"].replace("\\n", "\n")
+            fb_creds = st.secrets["firebase"]
+            private_key = fb_creds["private_key"].replace("\\n", "\n")
             
-        cred_dict = {
-            "type": fb_creds["type"],
-            "project_id": fb_creds["project_id"],
-            "private_key_id": fb_creds["private_key_id"],
-            "private_key": private_key,
-            "client_email": fb_creds["client_email"],
-            "client_id": fb_creds["client_id"],
-            "auth_uri": fb_creds["auth_uri"],
-            "token_uri": fb_creds["token_uri"],
-            "auth_provider_x509_cert_url": fb_creds["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": fb_creds["client_x509_cert_url"]
-        }
+            cred_dict = {
+                "type": fb_creds["type"],
+                "project_id": fb_creds["project_id"],
+                "private_key_id": fb_creds["private_key_id"],
+                "private_key": private_key,
+                "client_email": fb_creds["client_email"],
+                "client_id": fb_creds["client_id"],
+                "auth_uri": fb_creds["auth_uri"],
+                "token_uri": fb_creds["token_uri"],
+                "auth_provider_x509_cert_url": fb_creds["auth_provider_x509_cert_url"],
+                "client_x509_cert_url": fb_creds["client_x509_cert_url"]
+            }
+        except:
+            # Fall back to environment variables (Hugging Face deployment)
+            private_key = os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+            
+            cred_dict = {
+                "type": os.getenv("FIREBASE_TYPE", "service_account"),
+                "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+                "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+                "private_key": private_key,
+                "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+                "client_id": os.getenv("FIREBASE_CLIENT_ID"),
+                "auth_uri": os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
+                "token_uri": os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+                "auth_provider_x509_cert_url": os.getenv("FIREBASE_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
+                "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_X509_CERT_URL")
+            }
         
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
@@ -112,6 +126,33 @@ def validate_url(url: str) -> Tuple[bool, str]:
 # DATABASE OPERATIONS
 # ============================================================================
 
+def check_duplicate_fields(db, data: Dict) -> Tuple[bool, str]:
+    collection_ref = db.collection('project_submissions')
+    
+    unique_fields = {
+        'email': data['email'],
+        'enrollment_number': data['enrollment_number'],
+        'contact_number': data['contact_number'],
+        'project_name': data['project_name'],
+        'source_url': data['source_url']
+    }
+    
+    for field_name, field_value in unique_fields.items():
+        query = collection_ref.where(field_name, '==', field_value).limit(1)
+        docs = query.stream()
+        
+        for doc in docs:
+            field_display_names = {
+                'email': 'Email ID',
+                'enrollment_number': 'Enrollment Number',
+                'contact_number': 'Contact Number',
+                'project_name': 'Project Name',
+                'source_url': 'Source URL'
+            }
+            return True, f"This {field_display_names[field_name]} is already taken."
+    
+    return False, ""
+
 def save_submission(db, data: Dict) -> Tuple[bool, str]:
     try:
         # Use Enrollment Number as the Document ID
@@ -129,47 +170,27 @@ def save_submission(db, data: Dict) -> Tuple[bool, str]:
 
 def send_confirmation_email(recipient_email: str, full_name: str, project_name: str) -> bool:
     """
-    Send confirmation email - FIXED VERSION WITHOUT THREADING ISSUES
-    This version works properly in Streamlit by using environment variables directly
+    Send confirmation email to the user after successful submission.
+    Returns: True if successful, False otherwise
     """
-    print("\n" + "="*60)
-    print("EMAIL SENDING STARTED")
-    print("="*60)
-    print(f"Recipient: {recipient_email}")
-    print(f"Name: {full_name}")
-    print(f"Project: {project_name}")
-    
     try:
-        # Get email credentials from environment variables
-        print("\n[1/6] Fetching email credentials...")
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
         
+        # Get email credentials from Streamlit secrets
         sender_email = st.secrets["email"]["sender_email"]
         sender_password = st.secrets["email"]["sender_password"]
         smtp_server = st.secrets["email"]["smtp_server"]
         smtp_port = st.secrets["email"]["smtp_port"]
         
-        # Check if credentials exist
-        if not sender_email or not sender_password:
-            print("❌ EMAIL_SENDER or EMAIL_PASSWORD environment variables not set!")
-            print("\nPlease add these to your Hugging Face Space secrets:")
-            print("  - EMAIL_SENDER (your Gmail address)")
-            print("  - EMAIL_PASSWORD (your 16-character App Password)")
-            return False
-        
-        print(f"✅ Credentials loaded")
-        print(f"   Sender: {sender_email}")
-        print(f"   SMTP: {smtp_server}:{smtp_port}")
-        
         # Create email message
-        print("\n[2/6] Creating email message...")
         message = MIMEMultipart("alternative")
         message["Subject"] = "🎉 Project Submission Confirmation - DAV Subject"
         message["From"] = sender_email
         message["To"] = recipient_email
-        print("✅ Message headers set")
         
         # HTML email body
-        print("\n[3/6] Generating email content...")
         html_body = f"""
         <html>
             <body style="font-family: Arial, sans-serif; background-color: #F5FBE6; padding: 20px;">
@@ -192,7 +213,7 @@ def send_confirmation_email(recipient_email: str, full_name: str, project_name: 
                     </div>
                     
                     <p style="color: #215E61; font-size: 16px; line-height: 1.6;">
-                        Our team will review your submission shortly. If you have any questions or need to make changes, please don't hesitate to contact MR. PRINCE.
+                        Our team will review your submission shortly. If you have any questions or need to make changes, please don't hesitate to contact MR. RPINCE.
                     </p>
                     
                     <hr style="border: none; height: 2px; background: #215E61; margin: 20px 0;">
@@ -229,47 +250,20 @@ def send_confirmation_email(recipient_email: str, full_name: str, project_name: 
         part2 = MIMEText(html_body, "html")
         message.attach(part1)
         message.attach(part2)
-        print("✅ Email body created")
         
-        # Connect to SMTP server
-        print(f"\n[4/6] Connecting to {smtp_server}:{smtp_port}...")
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
-        print("✅ Connected to SMTP server")
-        
-        # Enable TLS
-        print("\n[5/6] Starting TLS encryption...")
-        server.starttls()
-        print("✅ TLS encryption enabled")
-        
-        # Login and send
-        print("\n[6/6] Authenticating and sending email...")
-        server.login(sender_email, sender_password)
-        print("✅ Authentication successful")
-        
-        server.sendmail(sender_email, recipient_email, message.as_string())
-        print("✅ Email sent successfully!")
-        
-        server.quit()
-        print("\n" + "="*60)
-        print("EMAIL SENDING COMPLETED SUCCESSFULLY")
-        print("="*60 + "\n")
+        # Send email
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, recipient_email, message.as_string())
         
         return True
         
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"\n❌ Authentication Error: {e}")
-        print("\n⚠️ COMMON FIX: Make sure you're using App Password, not regular Gmail password!")
-        print("How to get App Password:")
-        print("1. Go to https://myaccount.google.com/apppasswords")
-        print("2. Generate password for 'Mail'")
-        print("3. Copy the 16-character password")
-        print("4. Add to Hugging Face secrets as EMAIL_PASSWORD")
+    except KeyError:
+        st.warning("⚠️ Email service not configured. Please set up email credentials in Streamlit secrets.")
         return False
-        
     except Exception as e:
-        print(f"\n❌ Error: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
+        st.warning(f"⚠️ Could not send confirmation email: {str(e)}")
         return False
 
 # ============================================================================
@@ -450,7 +444,6 @@ def apply_custom_css():
     }
     </style>
 """, unsafe_allow_html=True)
-
 # ============================================================================
 # SUCCESS PAGE
 # ============================================================================
@@ -644,44 +637,32 @@ def main():
                         'submitted_at': firestore.SERVER_TIMESTAMP
                     }
                     
-                    # ============================================================
-                    # FIXED EMAIL LOGIC - NO THREADING, DIRECT CALL
-                    # ============================================================
+                    # --- REPLACEMENT CODE STARTS HERE ---
                     
-                    # Try to save to database
+                    # 1. NEW SAVE LOGIC (Replaces check_duplicate_fields)
+                    # We try to create the document directly. If the ID exists, it fails automatically.
                     success, error_msg = save_submission(db, submission_data)
                     
                     if success:
-                        # Data saved successfully, now try to send email
-                        # NO THREADING - Direct synchronous call
-                        
-                        try:
-                            # Send email directly (no threading)
-                            email_sent = send_confirmation_email(
+                        # 2. NEW EMAIL LOGIC (Replaces blocking email call)
+                        # We start a background thread so the user doesn't have to wait.
+                        email_thread = threading.Thread(
+                            target=send_confirmation_email,
+                            args=(
                                 submission_data['email'],
                                 submission_data['full_name'],
                                 submission_data['project_name']
                             )
-                            
-                            if email_sent:
-                                print("✅ Confirmation email sent successfully")
-                            else:
-                                print("⚠️ Email failed, but submission was saved")
-                                st.info("📝 Submission saved! Email notification could not be sent. Please check email configuration.")
-                                
-                        except Exception as e:
-                            # Email failed completely, but submission is still saved
-                            print(f"⚠️ Email exception: {e}")
-                            st.info("📝 Your submission was saved successfully!")
+                        )
+                        email_thread.start()
                         
-                        # Show success page regardless of email status
+                        # 3. Success Message
                         st.session_state.submitted_data = submission_data
                         st.session_state.submission_complete = True
                         time.sleep(0.5)
                         st.rerun()
-                        
                     else:
-                        # Database save failed
+                        # This catches the duplicate enrollment error from save_submission
                         st.error(f"❌ {error_msg}")
                         st.session_state.is_submitting = False
     
