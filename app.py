@@ -32,45 +32,55 @@ from email.mime.multipart import MIMEMultipart
 def init_firebase():
     """
     Initialize Firebase and return the Firestore client.
-    Works with both local secrets.toml and Hugging Face environment variables.
+    Prioritizes Streamlit secrets, then falls back to environment variables.
     """
     if not firebase_admin._apps:
         try:
-            # Fall back to environment variables (Hugging Face deployment)
-            private_key = os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+            # Try Streamlit secrets first (recommended for Streamlit Cloud)
+            if hasattr(st, 'secrets') and 'firebase' in st.secrets:
+                fb_creds = st.secrets["firebase"]
+                private_key = fb_creds["private_key"].replace("\\n", "\n")
+                
+                cred_dict = {
+                    "type": fb_creds["type"],
+                    "project_id": fb_creds["project_id"],
+                    "private_key_id": fb_creds["private_key_id"],
+                    "private_key": private_key,
+                    "client_email": fb_creds["client_email"],
+                    "client_id": fb_creds["client_id"],
+                    "auth_uri": fb_creds.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+                    "token_uri": fb_creds.get("token_uri", "https://oauth2.googleapis.com/token"),
+                    "auth_provider_x509_cert_url": fb_creds.get("auth_provider_x509_cert_url", "https://www.googleapis.com/oauth2/v1/certs"),
+                    "client_x509_cert_url": fb_creds["client_x509_cert_url"]
+                }
+            else:
+                # Fall back to environment variables
+                private_key = os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+                
+                cred_dict = {
+                    "type": os.getenv("FIREBASE_TYPE", "service_account"),
+                    "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+                    "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+                    "private_key": private_key,
+                    "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+                    "client_id": os.getenv("FIREBASE_CLIENT_ID"),
+                    "auth_uri": os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
+                    "token_uri": os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+                    "auth_provider_x509_cert_url": os.getenv("FIREBASE_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
+                    "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_X509_CERT_URL")
+                }
             
-            cred_dict = {
-                "type": os.getenv("FIREBASE_TYPE", "service_account"),
-                "project_id": os.getenv("FIREBASE_PROJECT_ID"),
-                "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
-                "private_key": private_key,
-                "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
-                "client_id": os.getenv("FIREBASE_CLIENT_ID"),
-                "auth_uri": os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
-                "token_uri": os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token"),
-                "auth_provider_x509_cert_url": os.getenv("FIREBASE_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
-                "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_X509_CERT_URL")
-            }
-        except:
-            # Try to get from st.secrets first (local development)
-            fb_creds = st.secrets["firebase"]
-            private_key = fb_creds["private_key"].replace("\\n", "\n")
+            # Validate required fields
+            if not cred_dict.get("project_id") or not cred_dict.get("private_key"):
+                raise ValueError("Missing required Firebase credentials. Please configure secrets in Streamlit Cloud.")
             
-            cred_dict = {
-                "type": fb_creds["type"],
-                "project_id": fb_creds["project_id"],
-                "private_key_id": fb_creds["private_key_id"],
-                "private_key": private_key,
-                "client_email": fb_creds["client_email"],
-                "client_id": fb_creds["client_id"],
-                "auth_uri": fb_creds["auth_uri"],
-                "token_uri": fb_creds["token_uri"],
-                "auth_provider_x509_cert_url": fb_creds["auth_provider_x509_cert_url"],
-                "client_x509_cert_url": fb_creds["client_x509_cert_url"]
-            }
-        
-        cred = credentials.Certificate(cred_dict)
-        firebase_admin.initialize_app(cred)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            
+        except Exception as e:
+            st.error(f"❌ Firebase initialization failed: {str(e)}")
+            st.info("Please configure Firebase credentials in Streamlit Cloud secrets.")
+            st.stop()
     
     return firestore.client()
 
@@ -146,382 +156,234 @@ def save_submission(db, data: Dict) -> Tuple[bool, str]:
 
 def send_confirmation_email(recipient_email: str, full_name: str, project_name: str) -> bool:
     """
-    Send confirmation email - FIXED VERSION WITHOUT THREADING ISSUES
-    This version works properly in Streamlit by using environment variables directly
+    Send confirmation email optimized for Streamlit Cloud
     """
-    print("\n" + "="*60)
-    print("EMAIL SENDING STARTED")
-    print("="*60)
-    print(f"Recipient: {recipient_email}")
-    print(f"Name: {full_name}")
-    print(f"Project: {project_name}")
-    
     try:
-        # Get email credentials from environment variables
-        print("\n[1/6] Fetching email credentials...")
-        
-        sender_email = os.getenv("EMAIL_SENDER")
-        sender_password = os.getenv("EMAIL_PASSWORD")
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        # Get email credentials from Streamlit secrets or environment variables
+        if hasattr(st, 'secrets') and 'email' in st.secrets:
+            sender_email = st.secrets["email"]["sender"]
+            sender_password = st.secrets["email"]["password"]
+            smtp_server = st.secrets["email"].get("smtp_server", "smtp.gmail.com")
+            smtp_port = int(st.secrets["email"].get("smtp_port", 587))
+        else:
+            sender_email = os.getenv("EMAIL_SENDER")
+            sender_password = os.getenv("EMAIL_PASSWORD")
+            smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+            smtp_port = int(os.getenv("SMTP_PORT", "587"))
         
         # Check if credentials exist
         if not sender_email or not sender_password:
-            print("❌ EMAIL_SENDER or EMAIL_PASSWORD environment variables not set!")
-            print("\nPlease add these to your Hugging Face Space secrets:")
-            print("  - EMAIL_SENDER (your Gmail address)")
-            print("  - EMAIL_PASSWORD (your 16-character App Password)")
+            print("⚠️ Email credentials not configured")
             return False
         
-        print(f"✅ Credentials loaded")
-        print(f"   Sender: {sender_email}")
-        print(f"   SMTP: {smtp_server}:{smtp_port}")
-        
         # Create email message
-        print("\n[2/6] Creating email message...")
         message = MIMEMultipart("alternative")
         message["Subject"] = "🎉 Project Submission Confirmation - DAV Subject"
         message["From"] = sender_email
         message["To"] = recipient_email
-        print("✅ Message headers set")
         
-        # HTML email body
-        print("\n[3/6] Generating email content...")
+        # Email body
         html_body = f"""
+        <!DOCTYPE html>
         <html>
-            <body style="font-family: Arial, sans-serif; background-color: #F5FBE6; padding: 20px;">
-                <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; padding: 30px; border: 2px solid #215E61;">
-                    <h2 style="color: #233D4D; text-align: center; margin-bottom: 20px;">✅ Submission Successful!</h2>
-                    
-                    <p style="color: #215E61; font-size: 16px; line-height: 1.6;">
-                        Hello <strong>{full_name}</strong>,
-                    </p>
-                    
-                    <p style="color: #215E61; font-size: 16px; line-height: 1.6;">
-                        Thank you for submitting your project to the <strong>DAV Project Submission</strong>. Your submission has been successfully recorded in our system.
-                    </p>
-                    
-                    <div style="background-color: #F5FBE6; border-left: 4px solid #215E61; padding: 15px; margin: 20px 0; border-radius: 6px;">
-                        <p style="color: #233D4D; margin: 10px 0;"><strong>📋 Submission Details:</strong></p>
-                        <p style="color: #233D4D; margin: 8px 0;"><strong>Project Name:</strong> {project_name}</p>
-                        <p style="color: #233D4D; margin: 8px 0;"><strong>Email:</strong> {recipient_email}</p>
-                        <p style="color: #233D4D; margin: 8px 0;"><strong>Submission Date:</strong> {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    </div>
-                    
-                    <p style="color: #215E61; font-size: 16px; line-height: 1.6;">
-                        Our team will review your submission shortly. If you have any questions or need to make changes, please don't hesitate to contact MR. PRINCE.
-                    </p>
-                    
-                    <hr style="border: none; height: 2px; background: #215E61; margin: 20px 0;">
-                    
-                    <p style="color: #6b7280; font-size: 14px; text-align: center;">
-                        This is an automated email. Please do not reply to this message.<br>
-                        © 2026 Project Form Submission. All rights reserved.
-                    </p>
+        <head>
+            <style>
+                body {{
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    line-height: 1.6;
+                    color: #333333;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                .header {{
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 30px;
+                    border-radius: 10px 10px 0 0;
+                    text-align: center;
+                }}
+                .header h1 {{
+                    margin: 0;
+                    font-size: 28px;
+                }}
+                .content {{
+                    background: #ffffff;
+                    padding: 30px;
+                    border: 1px solid #e0e0e0;
+                }}
+                .info-box {{
+                    background: #f8f9fa;
+                    border-left: 4px solid #667eea;
+                    padding: 15px;
+                    margin: 20px 0;
+                    border-radius: 4px;
+                }}
+                .info-box strong {{
+                    color: #667eea;
+                }}
+                .footer {{
+                    background: #f8f9fa;
+                    padding: 20px;
+                    text-align: center;
+                    border-radius: 0 0 10px 10px;
+                    border: 1px solid #e0e0e0;
+                    border-top: none;
+                }}
+                .checkmark {{
+                    font-size: 48px;
+                    color: #28a745;
+                    margin: 20px 0;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <div class="checkmark">✅</div>
+                <h1>Submission Successful!</h1>
+            </div>
+            
+            <div class="content">
+                <p>Dear <strong>{full_name}</strong>,</p>
+                
+                <p>Your project has been successfully submitted! We have received your submission and it's now under review.</p>
+                
+                <div class="info-box">
+                    <strong>📁 Project Name:</strong> {project_name}<br>
+                    <strong>📧 Email:</strong> {recipient_email}
                 </div>
-            </body>
+                
+                <p><strong>What happens next?</strong></p>
+                <ul>
+                    <li>Our team will review your project submission</li>
+                    <li>You'll receive updates via this email address</li>
+                    <li>Keep an eye on your inbox for further communications</li>
+                </ul>
+                
+                <p>Thank you for your submission!</p>
+            </div>
+            
+            <div class="footer">
+                <p style="margin: 0; color: #666;">This is an automated confirmation email.</p>
+                <p style="margin: 5px 0 0 0; color: #999; font-size: 12px;">
+                    DAV Project Submission System
+                </p>
+            </div>
+        </body>
         </html>
         """
         
-        # Plain text alternative
-        text_body = f"""
-        Submission Successful!
+        # Attach HTML content
+        html_part = MIMEText(html_body, "html")
+        message.attach(html_part)
         
-        Hello {full_name},
-        
-        Thank you for submitting your project to the DAV Project Submission. Your submission has been successfully recorded in our system.
-        
-        Submission Details:
-        - Project Name: {project_name}
-        - Email: {recipient_email}
-        - Submission Date: {time.strftime('%Y-%m-%d %H:%M:%S')}
-        
-        Our team will review your submission shortly. If you have any questions or need to make changes, please don't hesitate to contact MR. PRINCE.
-        
-        This is an automated email. Please do not reply to this message.
-        © 2026 Project Form Submission. All rights reserved.
-        """
-        
-        part1 = MIMEText(text_body, "plain")
-        part2 = MIMEText(html_body, "html")
-        message.attach(part1)
-        message.attach(part2)
-        print("✅ Email body created")
-        
-        # Connect to SMTP server
-        print(f"\n[4/6] Connecting to {smtp_server}:{smtp_port}...")
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
-        print("✅ Connected to SMTP server")
-        
-        # Enable TLS
-        print("\n[5/6] Starting TLS encryption...")
-        server.starttls()
-        print("✅ TLS encryption enabled")
-        
-        # Login and send
-        print("\n[6/6] Authenticating and sending email...")
-        server.login(sender_email, sender_password)
-        print("✅ Authentication successful")
-        
-        server.sendmail(sender_email, recipient_email, message.as_string())
-        print("✅ Email sent successfully!")
-        
-        server.quit()
-        print("\n" + "="*60)
-        print("EMAIL SENDING COMPLETED SUCCESSFULLY")
-        print("="*60 + "\n")
+        # Send email
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(message)
         
         return True
         
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"\n❌ Authentication Error: {e}")
-        print("\n⚠️ COMMON FIX: Make sure you're using App Password, not regular Gmail password!")
-        print("How to get App Password:")
-        print("1. Go to https://myaccount.google.com/apppasswords")
-        print("2. Generate password for 'Mail'")
-        print("3. Copy the 16-character password")
-        print("4. Add to Hugging Face secrets as EMAIL_PASSWORD")
-        return False
-        
     except Exception as e:
-        print(f"\n❌ Error: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Email error: {str(e)}")
         return False
 
 # ============================================================================
-# PROFESSIONAL CSS WITH HIGH CONTRAST
+# CUSTOM CSS
 # ============================================================================
 
 def apply_custom_css():
     st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    
-    /* Hide Streamlit Branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stDeployButton {visibility: hidden;}
-    header {visibility: hidden;}
-    
-    /* Page Background */
-    .main {
-        background: black;
-        padding: 2.5rem 1rem;
-        min-height: 100vh;
-    }
-    
-    /* Typography */
-    * {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-    
-    /* Ensure caret / cursor is always visible and accessible */
-    .stTextInput > div > div > input,
-    .stTextArea > div > div > textarea,
-    input[type="text"],
-    input[type="email"],
-    input[type="tel"],
-    textarea {
-        /* Primary styles */
-        border: 2px solid #d1d5db;
-        border-radius: 10px;
-        padding: 0.75rem 1rem;
-        font-size: 1rem;
-        color: #1a1a1a;
-        background: #fafafa;
-        transition: all 0.2s ease;
-        font-weight: 500;
-
-        /* Explicit caret/text-fill so the cursor is always visible across browsers */
-        caret-color: #0052a3;               /* visible caret color (blue) */
-        -webkit-text-fill-color: #1a1a1a;   /* for WebKit browsers */
-    }
-
-    /* Placeholder color */
-    .stTextInput > div > div > input::placeholder,
-    .stTextArea > div > div > textarea::placeholder {
-        color: #6b7280;
-        opacity: 0.7;
-    }
-    
-    /* Focus state: keep caret visible and add subtle highlight */
-    .stTextInput > div > div > input:focus,
-    .stTextArea > div > div > textarea:focus,
-    input[type="text"]:focus,
-    input[type="email"]:focus,
-    input[type="tel"]:focus,
-    textarea:focus {
-        border-color: #667eea;
-        background: #ffffff;
-        box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
-        outline: none;
-
-        /* reinforce caret visibility on focus */
-        caret-color: #0052a3;
-        -webkit-text-fill-color: #1a1a1a;
-    }
-
-    .detail-row {
-        background-color: #ffffff;
-        padding: 12px 15px;
-        margin: 8px 0;
-        border-radius: 8px;
-        border: 1px solid #e0e0e0;
-        border-left: 4px solid #008BFF;
-        transition: transform 0.2s;
-    }
-            
-    .detail-row:hover {
-            transform: translateX(5px);
-            border-left-color: #E4FF30;
-    }
-            
-    .detail-label {
-        color: #362F4F;
-        font-weight: 700;
-        font-size: 0.9rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-            
-    .detail-value {
-        color: #5B23FF;
-        font-size: 1.05rem;
-        margin-top: 3px;
-        font-family: monospace;
-    }
-                
-    /* Submit button styling */
-    .stButton > button {
-        width: 100%;
-        background: #0052a3;
-        color: #ffffff;
-        font-weight: 700;
-        font-size: 1.05rem;
-        letter-spacing: 0.02em;
-        border-radius: 12px;
-        padding: 1rem 2rem;
-        border: none;
-        margin-top: 1rem;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
-        text-transform: uppercase;
-    }
-    
-    .stButton > button:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 15px 35px rgba(102, 126, 234, 0.4);
-    }
-    
-    .stButton > button:active {
-        transform: translateY(-1px);
-    }
-    
-    /* Warning messages - HIGH CONTRAST */
-    .element-container .stAlert,
-    .stAlert {
-        border-radius: 10px;
-        border-left: 5px solid;
-        padding: 1rem 1.25rem;
-        margin-bottom: 1rem;
-        font-size: 0.95rem;
-        font-weight: 500;
-    }
-    
-    .stSuccess {
-        background-color: #f0fdf4;
-        border-left-color: #16a34a;
-        color: #15803d;
-    }
-    
-    .success-icon {
-        animation: popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-        font-size: 20px;
-        text-align: left;
-        margin-bottom: 10px;
-        text-shadow: 0 0 20px #E4FF30;
-    }                
-
-    .required {
-        color: red;
-        font-weight: 800;
-    }
-                      
-    .stError {
-        background-color: #fef2f2;
-        border-left-color: #dc2626;
-        color: #991b1b;
-    }
-    
-    .stWarning {
-        background-color: #fffbeb;
-        border-left-color: #f59e0b;
-        color: #b45309;
-    }
-    
-    .stInfo {
-        background-color: #eff6ff;
-        border-left-color: #3b82f6;
-        color: #1e40af;
-    }
+        /* Form styling */
+        .stForm {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        /* Input labels */
+        .input-label {
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 0.5rem;
+            display: block;
+            font-size: 0.95rem;
+        }
+        
+        .required {
+            color: #ef4444;
+            margin-left: 2px;
+        }
+        
+        /* Section headers */
+        .section-header {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #1f2937;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        
+        /* Success card */
+        .success-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 15px;
+            text-align: center;
+            margin: 2rem 0;
+        }
+        
+        .success-card h2 {
+            margin: 1rem 0;
+            font-size: 2rem;
+        }
+        
+        .info-grid {
+            background: rgba(255,255,255,0.1);
+            padding: 1.5rem;
+            border-radius: 10px;
+            margin: 1.5rem 0;
+            text-align: left;
+        }
+        
+        .info-item {
+            margin: 0.75rem 0;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .info-item:last-child {
+            border-bottom: none;
+        }
+        
+        /* Buttons */
+        .stButton>button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+            border: none;
+            padding: 0.75rem 2rem;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .stButton>button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
     </style>
-""", unsafe_allow_html=True)
-
-# ============================================================================
-# SUCCESS PAGE
-# ============================================================================
-
-def show_success_page(submission_data: Dict):
-    """Display a beautiful success page after form submission"""
-    st.markdown(f"""
-        <div class="success-container">
-            <div><div class="success-icon">🎉 Form Submit Successfully!</div>
-            </div>
-                <p class="success-message">
-                Thank you, <strong>{submission_data['full_name']}</strong> 😊<br>
-                Your project data has been successfully submitted to our system.
-            </p>
-        </div>
     """, unsafe_allow_html=True)
-    st.markdown("### 📋 Submission Summary")
-    
-    # Display submission details
-    details = [
-        ("Email", submission_data['email']),
-        ("Enrollment Number", submission_data['enrollment_number']),
-        ("Full Name", submission_data['full_name']),
-        ("Contact Number", submission_data['contact_number']),
-        ("Project Name", submission_data['project_name']),
-        ("Source URL", submission_data['source_url'])
-    ]
-    
-    for label, value in details:
-        st.markdown(
-            f'''
-            <div class="detail-row">
-                <div class="detail-label">{label}</div>
-                <div class="detail-value">{value}</div>
-            </div>
-            ''',
-            unsafe_allow_html=True
-        )
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.success("✉️ Please check your email for confirmation.")
-    st.info("💬 for any issues contact MR. PRINCE.")
-    st.balloons()
 
 # ============================================================================
-# MAIN APPLICATION
+# SESSION STATE INITIALIZATION
 # ============================================================================
 
-def main():
-    apply_custom_css()
-    db = init_firebase()
-    
-    # Initialize session state
+def init_session_state():
     if 'submission_complete' not in st.session_state:
         st.session_state.submission_complete = False
     if 'submitted_data' not in st.session_state:
@@ -530,15 +392,62 @@ def main():
         st.session_state.is_submitting = False
     if 'last_submission_time' not in st.session_state:
         st.session_state.last_submission_time = 0
+
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
+
+def main():
+    apply_custom_css()
+    init_session_state()
+    
+    # Initialize Firebase
+    try:
+        db = init_firebase()
+    except Exception as e:
+        st.error("Unable to connect to database. Please try again later.")
+        return
     
     # Show success page if submission is complete
     if st.session_state.submission_complete and st.session_state.submitted_data:
-        st.title("🎓 DAV Project Submission")
-        show_success_page(st.session_state.submitted_data)
+        data = st.session_state.submitted_data
         
-        # Add reset button
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        if st.button("📝 Submit Another Project", use_container_width=True):
+        st.markdown(f"""
+        <div class="success-card">
+            <div style="font-size: 4rem;">✅</div>
+            <h2>Submission Successful!</h2>
+            <p style="font-size: 1.1rem; margin: 1rem 0;">
+                Your project has been submitted successfully.
+            </p>
+            
+            <div class="info-grid">
+                <div class="info-item">
+                    <strong>📧 Email:</strong> {data['email']}
+                </div>
+                <div class="info-item">
+                    <strong>🎓 Enrollment:</strong> {data['enrollment_number']}
+                </div>
+                <div class="info-item">
+                    <strong>👤 Name:</strong> {data['full_name']}
+                </div>
+                <div class="info-item">
+                    <strong>📱 Contact:</strong> {data['contact_number']}
+                </div>
+                <div class="info-item">
+                    <strong>📁 Project:</strong> {data['project_name']}
+                </div>
+                <div class="info-item">
+                    <strong>🔗 URL:</strong> {data['source_url']}
+                </div>
+            </div>
+            
+            <p style="margin-top: 1.5rem; font-size: 0.95rem;">
+                A confirmation email has been sent to <strong>{data['email']}</strong>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("✨ Submit Another Project", use_container_width=True):
             st.session_state.submission_complete = False
             st.session_state.submitted_data = None
             st.session_state.is_submitting = False
@@ -661,34 +570,22 @@ def main():
                         'submitted_at': firestore.SERVER_TIMESTAMP
                     }
                     
-                    # ============================================================
-                    # FIXED EMAIL LOGIC - NO THREADING, DIRECT CALL
-                    # ============================================================
-                    
                     # Try to save to database
                     success, error_msg = save_submission(db, submission_data)
                     
                     if success:
                         # Data saved successfully, now try to send email
-                        # NO THREADING - Direct synchronous call
-                        
                         try:
-                            # Send email directly (no threading)
                             email_sent = send_confirmation_email(
                                 submission_data['email'],
                                 submission_data['full_name'],
                                 submission_data['project_name']
                             )
                             
-                            if email_sent:
-                                print("✅ Confirmation email sent successfully")
-                            else:
-                                print("⚠️ Email failed, but submission was saved")
-                                st.info("📝 Submission saved! Email notification could not be sent. Please check email configuration.")
+                            if not email_sent:
+                                st.info("📝 Submission saved! Email notification could not be sent.")
                                 
                         except Exception as e:
-                            # Email failed completely, but submission is still saved
-                            print(f"⚠️ Email exception: {e}")
                             st.info("📝 Your submission was saved successfully!")
                         
                         # Show success page regardless of email status
@@ -719,9 +616,9 @@ def main():
         
         **⚠️ Important Notes:**
         - All fields marked with * are mandatory
-        - Each field must contain unique information (no duplicates allowed)
+        - Each enrollment number can only be submitted once
         - Double-check all information before submitting
-        - You will receive a confirmation upon successful submission
+        - You will receive a confirmation email upon successful submission
         """)
 
 if __name__ == "__main__":
