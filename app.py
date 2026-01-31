@@ -35,23 +35,22 @@ def init_firebase():
     Works with both local secrets.toml and Hugging Face environment variables.
     """
     if not firebase_admin._apps:
-        try:
             # Try to get from st.secrets first (local development)
-            fb_creds = st.secrets["firebase"]
-            private_key = fb_creds["private_key"].replace("\\n", "\n")
+        fb_creds = st.secrets["firebase"]
+        private_key = fb_creds["private_key"].replace("\\n", "\n")
             
-            cred_dict = {
-                "type": fb_creds["type"],
-                "project_id": fb_creds["project_id"],
-                "private_key_id": fb_creds["private_key_id"],
-                "private_key": private_key,
-                "client_email": fb_creds["client_email"],
-                "client_id": fb_creds["client_id"],
-                "auth_uri": fb_creds["auth_uri"],
-                "token_uri": fb_creds["token_uri"],
-                "auth_provider_x509_cert_url": fb_creds["auth_provider_x509_cert_url"],
-                "client_x509_cert_url": fb_creds["client_x509_cert_url"]
-            }
+        cred_dict = {
+            "type": fb_creds["type"],
+            "project_id": fb_creds["project_id"],
+            "private_key_id": fb_creds["private_key_id"],
+            "private_key": private_key,
+            "client_email": fb_creds["client_email"],
+            "client_id": fb_creds["client_id"],
+            "auth_uri": fb_creds["auth_uri"],
+            "token_uri": fb_creds["token_uri"],
+            "auth_provider_x509_cert_url": fb_creds["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": fb_creds["client_x509_cert_url"]
+        }
         
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
