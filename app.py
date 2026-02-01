@@ -558,12 +558,11 @@ def apply_custom_css():
     .stButton > button:hover {
         transform: translateY(-3px);
         box-shadow: 0 15px 35px rgba(102, 126, 234, 0.4);
-        background: #003d7a;
+        background: #f5fffa;
     }
     
     .stButton > button:active {
         transform: translateY(-1px);
-        background: #f5fffa
     }
     
     .stButton > button:disabled {
