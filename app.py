@@ -465,7 +465,7 @@ def apply_custom_css():
     
     /* Page Background */
     .main {
-        background: #00003f;
+        background: #000014;
         padding: 2.5rem 1rem;
         min-height: 100vh;
     }
