@@ -1036,6 +1036,15 @@ def main():
         - This prevents accidental duplicate submissions
         - If you need to update existing information, contact MR. PRINCE
         """)
+        
+    st.markdown(f"""
+        <div style="display:flex;flex-direction:column;align-items:center;gap:0.75rem;">
+            <div style="background: linear-gradient(135deg, #66eeea 0%, #764ba2 100%); 
+                        padding: 1rem; border-radius: 12px; margin: 0.5rem; color: black; width:100%; max-width:100%;">
+                <div class="success-icon" style="font-size: 1.1rem; margin-top: 0.3rem;">Find My GitHub Profile for more fun 😊</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
