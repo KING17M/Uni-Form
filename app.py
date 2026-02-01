@@ -563,6 +563,7 @@ def apply_custom_css():
     
     .stButton > button:active {
         transform: translateY(-1px);
+        background: #f5fffa
     }
     
     .stButton > button:disabled {
