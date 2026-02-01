@@ -1037,6 +1037,8 @@ def main():
         - If you need to update existing information, contact MR. PRINCE
         """)
         
+    st.markdown("<br>", unsafe_allow_html=True)
+    
     st.markdown(f"""
         <div style="display:flex;flex-direction:column;align-items:center;gap:0.75rem;">
             <div style="background: linear-gradient(135deg, #66eeea 0%, #764ba2 100%); 
